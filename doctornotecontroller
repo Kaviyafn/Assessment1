@@ -1,0 +1,181 @@
+package com.infinite.ehrSystem.doctorNote.controller;
+
+import com.infinite.ehrSystem.doctorNote.dto.DoctorNoteDTO;
+import com.infinite.ehrSystem.doctorNote.service.DoctorNoteService;
+import com.infinite.ehrSystem.visit.service.VisitService;
+import com.infinite.ehrSystem.auth.repository.UserRepository;
+import com.infinite.ehrSystem.patient.repository.PatientRepository;
+import jakarta.persistence.EntityNotFoundException;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.validation.BindingResult;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+
+import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@Controller
+@RequiredArgsConstructor
+public class DoctorNoteController {
+
+    private final DoctorNoteService doctorNoteService;
+    private final VisitService visitService;
+    private final UserRepository userRepository;
+    private final PatientRepository patientRepository;
+
+    @GetMapping("/doctor-notes/view")
+    public String doctorNotesView(@RequestParam UUID visitId, @RequestParam(required = false) UUID doctorId, Model model) {
+
+        var notes = doctorNoteService.getNotesByVisitId(visitId);
+        
+
+        var visit = visitService.getVisitById(visitId);
+        String visitStatus = visit.getStatus() != null ? visit.getStatus().toString() : "OPEN";
+        
+        String patientName = "Unknown";
+        String doctorName = "Unknown";
+        
+        try {
+            var patient = patientRepository.findById(visit.getPatientId());
+            if (patient.isPresent()) {
+                patientName = patient.get().getName();
+            }
+        } catch (Exception e) {
+            patientName = "Unknown";
+        }
+        
+        try {
+            var doctor = userRepository.findById(visit.getDoctorId());
+            if (doctor.isPresent()) {
+                doctorName = doctor.get().getUsername();
+            }
+        } catch (Exception e) {
+            doctorName = "Unknown";
+        }
+        
+        if (doctorId == null) {
+            doctorId = visit.getDoctorId();
+        }
+        
+        model.addAttribute("visitId", visitId);
+        model.addAttribute("patientName", patientName);
+        model.addAttribute("doctorId", doctorId);
+        model.addAttribute("doctorName", doctorName);
+        model.addAttribute("visitStatus", visitStatus);
+        model.addAttribute("doctorNotes", notes);
+
+        return "doctor-notes-view";
+    }
+
+    @GetMapping("/doctor-notes/form")
+    public String doctorNotesForm(@RequestParam UUID visitId, @RequestParam UUID doctorId, Model model) {
+
+        var visit = visitService.getVisitById(visitId);
+        
+        String patientName = "Unknown";
+        try {
+            var patient = patientRepository.findById(visit.getPatientId());
+            if (patient.isPresent()) {
+                patientName = patient.get().getName();
+            }
+        } catch (Exception e) {
+            patientName = "Unknown";
+        }
+        
+        String doctorName = "Unknown";
+        try {
+            var doctor = userRepository.findById(visit.getDoctorId());
+            if (doctor.isPresent()) {
+                doctorName = doctor.get().getUsername();
+            }
+        } catch (Exception e) {
+            doctorName = "Unknown";
+        }
+
+        model.addAttribute("visitId", visitId);
+        model.addAttribute("doctorId", doctorId);
+        model.addAttribute("patientName", patientName);
+        model.addAttribute("doctorName", doctorName);
+
+        return "doctor-notes-form";
+    }
+
+
+    @PostMapping(value = "/doctor-notes/save", consumes = "application/json", produces = "application/json")
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> saveDoctorNoteJson(@Valid @RequestBody DoctorNoteDTO doctorNoteDTO) {
+        try {
+            doctorNoteService.saveDoctorNote(doctorNoteDTO);
+
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("success", true);
+            resp.put("message", "Doctor note saved successfully");
+            resp.put("redirect", "/doctor-notes/view?visitId=" + doctorNoteDTO.getVisitId() + "&doctorId=" + doctorNoteDTO.getDoctorId());
+            return ResponseEntity.ok(resp);
+        } catch (IllegalArgumentException | EntityNotFoundException ex) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("success", false);
+            resp.put("message", ex.getMessage());
+            return ResponseEntity.badRequest().body(resp);
+        } catch (Exception ex) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("success", false);
+            resp.put("message", "Internal server error");
+            return ResponseEntity.status(500).body(resp);
+        }
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
+        String message = ex.getBindingResult().getAllErrors().stream()
+                .map(err -> err.getDefaultMessage())
+                .collect(Collectors.joining("; "));
+
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", false);
+        resp.put("message", message);
+        return ResponseEntity.badRequest().body(resp);
+    }
+
+    @PostMapping("/doctor-notes/save")
+    public String saveDoctorNote(@Valid @ModelAttribute("doctorNoteDTO") DoctorNoteDTO doctorNoteDTO,
+            BindingResult bindingResult,
+            RedirectAttributes redirectAttributes,
+            Model model) {
+
+        if (bindingResult.hasErrors()) {
+            model.addAttribute("visitId", doctorNoteDTO.getVisitId());
+            model.addAttribute("doctorId", doctorNoteDTO.getDoctorId());
+            model.addAttribute("errorMessage", "Please fix the highlighted validation errors.");
+            return "doctor-notes-form";
+        }
+
+        try {
+            doctorNoteService.saveDoctorNote(doctorNoteDTO);
+            redirectAttributes.addFlashAttribute("successMessage", "Doctor note saved successfully.");
+            return "redirect:/doctor-notes/view?visitId="
+                    + doctorNoteDTO.getVisitId()
+                    + "&doctorId="
+                    + doctorNoteDTO.getDoctorId();
+        } catch (IllegalArgumentException | EntityNotFoundException ex) {
+            model.addAttribute("visitId", doctorNoteDTO.getVisitId());
+            model.addAttribute("doctorId", doctorNoteDTO.getDoctorId());
+            model.addAttribute("errorMessage", ex.getMessage());
+            return "doctor-notes-form";
+        }
+    }
+}
